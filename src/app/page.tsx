@@ -4,7 +4,7 @@ import { useEffect, useState, useCallback } from "react";
 import {
   DashboardKPI,
   INSTITUTIONAL_CONFIG
-} from "@/lib/googleSheets";
+} from "@/lib/config";
 import {
   Handshake,
   AlertTriangle,
