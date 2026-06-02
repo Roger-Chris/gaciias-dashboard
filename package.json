@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev",
+    "dev": "mkdir -p /dev/shm/gaciias-dashboard-next && (test -L .next || (rm -rf .next && ln -s /dev/shm/gaciias-dashboard-next .next)) && next dev",
     "build": "next build",
     "start": "next start",
     "lint": "eslint"

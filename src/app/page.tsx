@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import {
   DashboardKPI,
   INSTITUTIONAL_CONFIG
@@ -40,6 +40,7 @@ import {
 export default function Dashboard() {
   const [kpis, setKpis] = useState<DashboardKPI[]>([]);
   const [syncTime, setSyncTime] = useState<string>("");
+  const [sheetLastUpdated, setSheetLastUpdated] = useState<string>("");
   const [dataSource, setDataSource] = useState<string>("sheet");
   const [loading, setLoading] = useState<boolean>(true);
   const [syncing, setSyncing] = useState<boolean>(false);
@@ -50,14 +51,16 @@ export default function Dashboard() {
     type: null
   });
   const [isMounted, setIsMounted] = useState(false);
+  const [timeLeft, setTimeLeft] = useState<number>(600); // 10 minutes default
 
-  // Avoid hydration mismatch for client charts
-  useEffect(() => {
-    setIsMounted(true);
-    loadData();
+  const showToast = useCallback((message: string, type: "success" | "error") => {
+    setToast({ message, type });
+    setTimeout(() => {
+      setToast({ message: "", type: null });
+    }, 5000);
   }, []);
 
-  const loadData = async () => {
+  const loadData = useCallback(async () => {
     setSyncing(true);
     setError(null);
     try {
@@ -67,23 +70,50 @@ export default function Dashboard() {
       if (res.ok && result.kpis) {
         setKpis(result.kpis);
         setSyncTime(result.timestamp);
+        setSheetLastUpdated(result.lastUpdated || "");
         setDataSource(result.source);
         setError(null);
+        setTimeLeft(600); // Reset timer on successful fetch
         showToast("Synced successfully with live Google Sheet!", "success");
       } else {
         throw new Error(result.error || "Failed to retrieve Google Sheet data");
       }
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error(err);
-      setError(err.message || "An unexpected error occurred while fetching data.");
+      const errMsg = err instanceof Error ? err.message : "An unexpected error occurred while fetching data.";
+      setError(errMsg);
       showToast("Data synchronization failed.", "error");
     } finally {
       setLoading(false);
       setSyncing(false);
     }
-  };
+  }, [showToast]);
 
-  const triggerEmailReport = async () => {
+  // Avoid hydration mismatch for client charts
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setIsMounted(true);
+    loadData();
+  }, [loadData]);
+
+  // Auto-refresh timer effect
+  useEffect(() => {
+    if (!isMounted || loading || !!error) return;
+
+    const timer = setInterval(() => {
+      setTimeLeft((prev) => {
+        if (prev <= 1) {
+          loadData();
+          return 600;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+
+    return () => clearInterval(timer);
+  }, [isMounted, loading, error, loadData]);
+
+  const triggerEmailReport = useCallback(async () => {
     if (emailSending || !!error || kpis.length === 0) return;
     setEmailSending(true);
     showToast("Compiling report and connecting to Resend API...", "success");
@@ -96,7 +126,7 @@ export default function Dashboard() {
         },
         body: JSON.stringify({
           kpis,
-          timestamp: syncTime,
+          timestamp: sheetLastUpdated || syncTime,
           source: dataSource
         })
       });
@@ -108,38 +138,43 @@ export default function Dashboard() {
       } else {
         throw new Error(data.error || "Resend endpoint returned an error");
       }
-    } catch (error: any) {
-      console.error(error);
-      showToast(`Email trigger failed: ${error.message || "Unknown error"}`, "error");
+    } catch (err: unknown) {
+      console.error(err);
+      const errMsg = err instanceof Error ? err.message : "Unknown error";
+      showToast(`Email trigger failed: ${errMsg}`, "error");
     } finally {
       setEmailSending(false);
     }
-  };
-
-  const showToast = (message: string, type: "success" | "error") => {
-    setToast({ message, type });
-    setTimeout(() => {
-      setToast({ message: "", type: null });
-    }, 5000);
-  };
+  }, [emailSending, error, kpis, sheetLastUpdated, syncTime, dataSource, showToast]);
 
   // Helper to extract count for specific KPI modules safely
   const getKpiValue = (moduleName: string, defaultVal: number): number => {
+    const cleanKey = (str: string) => str.replace(/[\u2014\u2013-]/g, "-").replace(/\s+/g, " ").trim().toLowerCase();
+    const target = cleanKey(moduleName);
     const matched = kpis.find(
-      (k) => k.module.toLowerCase() === moduleName.toLowerCase()
+      (k) => cleanKey(k.module) === target
     );
     return matched ? matched.count : defaultVal;
   };
 
   // Filter KPI data values
-  const activeMoUs = getKpiValue("Active MoUs", 48);
-  const expiringMoUs = getKpiValue("Expiring MoUs", 12);
-  const facultyEngagements = getKpiValue("Faculty Engagements", 184);
-  const studentParticipation = getKpiValue("Student Participation", 1250);
-  const visitingExperts = getKpiValue("Visiting Experts", 37);
-  const industryCollabs = getKpiValue("Industry Collaborations", 72);
-  const publications = getKpiValue("Publications", 420);
-  const patents = getKpiValue("Patents", 24);
+  const activeMoUs = getKpiValue("MoUs — Active", 48);
+  const expiringMoUs = getKpiValue("MoUs — Expiring in 60 Days", 12);
+  const facultyEngagements = getKpiValue("Faculty Engagements (This Year)", 184);
+  
+  // Student Participation consists of Inbound + Outbound
+  const inboundStudents = getKpiValue("Students — Inbound", 0);
+  const outboundStudents = getKpiValue("Students — Outbound", 0);
+  const studentParticipation = (inboundStudents + outboundStudents) || 1250;
+
+  const visitingExperts = getKpiValue("Visiting Experts (This Year)", 37);
+  const industryCollabs = getKpiValue("Industry Collaborations (Active)", 72);
+  const publications = getKpiValue("Publications (Total)", 420);
+  
+  // Patents consists of Filed + Granted
+  const patentsFiled = getKpiValue("Patents — Filed", 0);
+  const patentsGranted = getKpiValue("Patents — Granted", 0);
+  const patents = (patentsFiled + patentsGranted) || 24;
 
   // Recharts Chart Data: Research output (Publications & Patents)
   // Maps either custom records from sheet or splits total publications and patents over Q1-Q4
@@ -167,12 +202,9 @@ export default function Dashboard() {
   ];
 
   // Recharts Chart Data: Student Mobility (Inbound vs Outbound)
-  const inboundStudents = getKpiValue("Student Mobility: Inbound", Math.round(studentParticipation * 0.62));
-  const outboundStudents = getKpiValue("Student Mobility: Outbound", Math.round(studentParticipation * 0.38));
-  
   const studentMobilityData = [
-    { name: "Inbound Mobility", value: inboundStudents, color: "#06b6d4" },
-    { name: "Outbound Mobility", value: outboundStudents, color: "#ec4899" }
+    { name: "Inbound Mobility", value: inboundStudents || Math.round(studentParticipation * 0.62), color: "#06b6d4" },
+    { name: "Outbound Mobility", value: outboundStudents || Math.round(studentParticipation * 0.38), color: "#ec4899" }
   ];
 
   // Bento Card styling mapping
@@ -242,10 +274,10 @@ export default function Dashboard() {
       value: publications,
       description: "Scopus, Web of Science & UGC-CARE articles",
       icon: BookOpen,
-      color: "from-blue-500/20 to-blue-600/5",
-      border: "hover:border-blue-500/30",
-      iconColor: "text-blue-400",
-      glow: "shadow-blue-500/5"
+      color: "from-blue-400/20 to-blue-500/5",
+      border: "hover:border-blue-400/30",
+      iconColor: "text-blue-300",
+      glow: "shadow-blue-400/5"
     },
     {
       title: "Patents",
@@ -286,6 +318,17 @@ export default function Dashboard() {
           </div>
 
           <div className="flex items-center gap-3">
+            {/* Auto-refresh countdown indicator */}
+            {isMounted && !loading && !error && (
+              <div className="hidden sm:flex flex-col text-right">
+                <span className="text-[10px] text-slate-500 uppercase">Auto-sync in</span>
+                <span className="text-xs font-semibold text-indigo-400 font-mono">
+                  {Math.floor(timeLeft / 60).toString().padStart(2, "0")}:
+                  {(timeLeft % 60).toString().padStart(2, "0")}
+                </span>
+              </div>
+            )}
+
             {/* Sync Timestamp indicator */}
             <div className="hidden md:flex flex-col text-right">
               <span className="text-[10px] text-slate-500 uppercase">Last Synchronized</span>
@@ -336,6 +379,11 @@ export default function Dashboard() {
               </h2>
               <p className="text-xs text-slate-400">
                 Connected to Spreadsheet ID: <span className="font-mono text-slate-300 select-all">{INSTITUTIONAL_CONFIG.sheetId}</span>
+                {sheetLastUpdated && (
+                  <span className="ml-2 pl-2 border-l border-slate-800">
+                    Sheet Updated: <strong className="text-slate-300 font-mono">{sheetLastUpdated}</strong>
+                  </span>
+                )}
               </p>
             </div>
           </div>
@@ -528,7 +576,7 @@ export default function Dashboard() {
 
                 <div className="h-80 w-full select-none" style={{ minHeight: "300px" }}>
                   {isMounted && (
-                    <ResponsiveContainer width="100%" height="100%">
+                    <ResponsiveContainer width="100%" height="100%" minHeight={300}>
                       <BarChart
                         data={researchChartData}
                         margin={{ top: 10, right: 10, left: -20, bottom: 0 }}
@@ -577,8 +625,8 @@ export default function Dashboard() {
                         {/* Define gradients for Recharts */}
                         <defs>
                           <linearGradient id="publicationsGrad" x1="0" y1="0" x2="0" y2="1">
-                            <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.8} />
-                            <stop offset="95%" stopColor="#2563eb" stopOpacity={0.2} />
+                            <stop offset="5%" stopColor="#60a5fa" stopOpacity={0.8} />
+                            <stop offset="95%" stopColor="#3b82f6" stopOpacity={0.2} />
                           </linearGradient>
                           <linearGradient id="patentsGrad" x1="0" y1="0" x2="0" y2="1">
                             <stop offset="5%" stopColor="#f59e0b" stopOpacity={0.8} />
@@ -604,7 +652,7 @@ export default function Dashboard() {
 
                 <div className="h-64 w-full relative flex items-center justify-center my-4 select-none">
                   {isMounted && (
-                    <ResponsiveContainer width="100%" height="100%">
+                    <ResponsiveContainer width="100%" height="100%" minHeight={250}>
                       <PieChart>
                         <Pie
                           data={studentMobilityData}
