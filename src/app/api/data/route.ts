@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
-import { getDashboardData, sendEmailReport } from "@/lib/googleSheets";
+import { getDashboardData } from "@/lib/dataFetcher";
+import { sendEmailReport } from "@/lib/email";
 import fs from "fs";
 import path from "path";
 
@@ -8,6 +9,9 @@ export const dynamic = "force-dynamic";
 export async function GET() {
   try {
     const data = await getDashboardData();
+    if (!data) {
+      throw new Error("Failed to retrieve dashboard data from Google Sheets");
+    }
 
     // Local/Dev Automation Check: Send weekly report automatically every 7 days
     try {

@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
-import { getDashboardData, sendEmailReport } from "@/lib/googleSheets";
+import { getDashboardData } from "@/lib/dataFetcher";
+import { sendEmailReport } from "@/lib/email";
 
 export const dynamic = "force-dynamic";
 
@@ -19,6 +20,9 @@ export async function GET(request: Request) {
 
     console.log("Weekly cron job triggered. Fetching dashboard data...");
     const data = await getDashboardData();
+    if (!data) {
+      throw new Error("Failed to retrieve dashboard data from Google Sheets");
+    }
 
     console.log("Sending weekly email report to Director...");
     const emailResult = await sendEmailReport(data.kpis, data.lastUpdated, data.source, true);

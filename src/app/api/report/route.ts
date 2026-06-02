@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { sendEmailReport } from "@/lib/googleSheets";
+import { sendEmailReport } from "@/lib/email";
 
 export async function POST(request: Request) {
   try {
